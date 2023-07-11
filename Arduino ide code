@@ -1,0 +1,111 @@
+#include <Wire.h>
+#include <Adafruit_VL53L0X.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <MPU6050.h>
+#include <ThingSpeak.h>
+ 
+const char* ssid = "DESKTOP";
+const char* password = "123456788";
+const char* server = "api.thingspeak.com";
+
+Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+WiFiClient client;
+
+unsigned long myChannelNumber = 2126976;
+const char * myWriteAPIKey = "YDIILPG6T7A90HBD";
+const char* myStatusMessage = "Warning: TOF sensor range is beyond 100mm!";
+
+// MPU6050 settings
+MPU6050 mpu;
+int16_t accelX, accelY, accelZ;
+int16_t gyroX, gyroY, gyroZ;
+float rotX;
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) {
+    delay(10); // wait for serial port to connect
+  }
+
+  if (!lox.begin()) {
+    Serial.println(F("Failed to boot VL53L0X"));
+    while(1);
+  }
+  
+  Serial.println(F("VL53L0X API Simple Ranging example\n\n"));
+
+  // Connect to Wi-Fi network
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+
+  // Initialize ThingSpeak client
+  ThingSpeak.begin(client);
+
+  // Initialize MPU6050
+  Wire.begin();
+  mpu.initialize();
+
+}
+
+void loop() {
+  VL53L0X_RangingMeasurementData_t measure;
+  lox.rangingTest(&measure, false); // pass in 'true' to get debug data printout!
+
+  if (measure.RangeMilliMeter > 100) {
+    Serial.print("Warning: TOF sensor range is beyond 100mm! Range: ");
+    Serial.println(measure.RangeMilliMeter);
+
+    if (client.connect(server,80)) {
+      String postStr = String(myStatusMessage);
+      postStr += "&field1=";
+      postStr += String(measure.RangeMilliMeter);
+      postStr += "\r\n\r\n";
+
+      client.print("POST /update HTTP/1.1\n");
+      client.print("Host: api.thingspeak.com\n");
+      client.print("Connection: close\n");
+      client.print("X-THINGSPEAKAPIKEY: " + String(myWriteAPIKey) + "\n");
+      client.print("Content-Type: application/x-www-form-urlencoded\n");
+      client.print("Content-Length: ");
+      client.print(postStr.length());
+      client.print("\n\n");
+      client.print(postStr);
+
+      Serial.println("Data sent to ThingSpeak");
+    }
+    client.stop();
+  }
+  delay(5000);
+
+  // Read data from MPU6050
+  mpu.getMotion6(&accelX, &accelY, &accelZ, &gyroX, &gyroY, &gyroZ);
+
+  // Calculate rotation around the x-axis
+  rotX = (atan2(accelY, accelZ) * 180.0) / M_PI;
+
+  // Print rotation on serial monitor
+  Serial.print("Rotation X: ");
+  Serial.println(rotX);
+
+  // Upload data to ThingSpeak
+  ThingSpeak.setField(2, rotX);
+  int response = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+
+  if (response == 200) {
+    Serial.println("Data sent to ThingSpeak(mpu)");
+  } else {
+    Serial.print("Error sending data of mpu: ");
+    Serial.println(response);
+  }
+
+  // Wait for 10 seconds before taking the next reading
+  delay(10000);
+}
